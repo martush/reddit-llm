@@ -4,11 +4,14 @@ import os
 import duckdb
 import praw
 from datetime import datetime
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
+from pathlib import Path
 
-BASE_DIR = "/home/martina/Desktop/Git/reddit-llm"
+#load_dotenv(f"{BASE_DIR}/.env")
+load_dotenv(find_dotenv(usecwd=False))
 
-load_dotenv(f"{BASE_DIR}/.env")
+#BASE_DIR = "/home/martina/Desktop/Git/reddit-llm"
+BASE_DIR = Path(os.environ["BASE_DIR"])
 
 DB_PATH = f"{BASE_DIR}/data/reddit.duckdb"
 
