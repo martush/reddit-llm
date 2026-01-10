@@ -15,13 +15,15 @@ BASE_DIR = Path(os.environ["BASE_DIR"])
 
 DB_PATH = f"{BASE_DIR}/data/reddit.duckdb"
 
-
 SUBREDDITS = {
-    "wallstreetbets": {"limit": 20, "sort": "top"},
-    "stocks": {"limit": 10, "sort": "hot"},
-    "investing": {"limit": 10, "sort": "hot"},
-    "options": {"limit": 10, "sort": "hot"},
+    "wallstreetbets" : {"limit": 30, "mode": "top_day", "min_comments": 200},
+    "stocks"         : {"limit": 20, "mode": "hot", "min_comments": 50},
+    "investing"      : {"limit": 20, "mode": "hot", "min_comments": 30},
+    "StockMarket"    : {"limit": 20, "mode": "hot", "min_comments": 30},
+    "options"        : {"limit": 20, "mode": "hot", "min_comments": 20},
+    "ValueInvesting" : {"limit": 20, "mode": "hot", "min_comments": 10}
 }
+
 
 reddit = praw.Reddit(
     client_id=os.environ["REDDIT_CLIENT_ID"],
@@ -36,8 +38,10 @@ print('Connected to db')
 for subreddit_name, cfg in SUBREDDITS.items():
     subreddit = reddit.subreddit(subreddit_name)
 
-    if cfg["sort"] == "top":
+    if cfg["mode"] == "top_day":
         posts = subreddit.top(time_filter="day", limit=cfg["limit"])
+    elif cfg["mode"] == "new":
+        posts = subreddit.new(limit=cfg["limit"])
     else:
         posts = subreddit.hot(limit=cfg["limit"])
 
