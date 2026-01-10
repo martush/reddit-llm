@@ -30,5 +30,27 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 """)
 
+con.execute("""
+CREATE TABLE IF NOT EXISTS comment_tickers (
+    comment_id TEXT,
+    ticker TEXT,
+    direction TEXT,   -- bullish | bearish | neutral | unknown
+    confidence DOUBLE,
+    PRIMARY KEY (comment_id, ticker)
+);
+""")
+
+con.execute("""
+CREATE TABLE IF NOT EXISTS post_tickers (
+    post_id TEXT,
+    ticker TEXT,
+    direction TEXT,
+    confidence DOUBLE,
+    method TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (post_id, ticker)
+);
+""")
+
 con.close()
 print("DuckDB initialized.")
