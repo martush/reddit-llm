@@ -52,5 +52,31 @@ CREATE TABLE IF NOT EXISTS post_tickers (
 );
 """)
 
+con.execute("""
+CREATE TABLE IF NOT EXISTS embedding_queue (
+  doc_id TEXT PRIMARY KEY,              -- stable unique id
+  source_type TEXT NOT NULL,            -- 'post' or 'comment'
+  post_id TEXT,                         -- for both posts and comments
+  comment_id TEXT,                      -- only for comments
+  subreddit TEXT,
+  created_utc TIMESTAMP,
+  score BIGINT,                         -- upvotes score
+  num_comments BIGINT,                  -- only for posts (nullable for comments)
+  url TEXT,                             -- reddit URL if available
+  title TEXT,                           -- posts only
+  text TEXT NOT NULL,                   -- text we embed
+  char_len BIGINT NOT NULL,
+  inserted_at TIMESTAMP DEFAULT NOW(),
+  embedded BOOLEAN DEFAULT FALSE,
+  embedded_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_queue_embedded ON embedding_queue(embedded);
+CREATE INDEX IF NOT EXISTS idx_embedding_queue_created ON embedding_queue(created_utc);
+
+
+""")
+
+
 con.close()
 print("DuckDB initialized.")

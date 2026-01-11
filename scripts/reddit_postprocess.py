@@ -45,7 +45,7 @@ class Config:
 def load_config() -> Config:
     dotenv_path = find_dotenv(usecwd=False)
     if not dotenv_path:
-        raise RuntimeError("Could not find .env. Put it in repo root or set env vars manually.")
+        raise RuntimeError("Could not find .env")
 
     load_dotenv(dotenv_path)
 
@@ -122,13 +122,13 @@ def assert_tickers_table_exists(con: duckdb.DuckDBPyConnection) -> None:
 # Capture tokens that could be tickers ($TSLA, TSLA, etc.) but do NOT uppercase the text first.
 CAND_RE = re.compile(r'(?<![A-Za-z0-9])(\$?[A-Za-z]{1,5})(?![A-Za-z0-9])')
 
-# CONTEXT_WORDS = {
-#     "ticker", "stock", "shares", "share", "equity",
-#     "calls", "puts", "option", "options",
-#     "buy", "sell", "long", "short",
-#     "earnings", "guidance", "revenue", "ipo",
-#     "pump", "dump", "squeeze", "dd", "pt",
-# }
+CONTEXT_WORDS = {
+    "ticker", "stock", "shares", "share", "equity",
+    "calls", "puts", "option", "options",
+    "buy", "sell", "long", "short",
+    "earnings", "guidance", "revenue", "ipo",
+    "pump", "dump", "squeeze", "dd", "pt",
+}
 
 # Extremely ambiguous tickers that are also common English words
 AMBIGUOUS_ENGLISH = {
@@ -190,11 +190,11 @@ def _looks_like_article_A(text: str, start: int, end: int) -> bool:
 
 
 
-# def _has_context(text_lower: str, start: int, end: int, window: int = 60) -> bool:
-#     left = max(0, start - window)
-#     right = min(len(text_lower), end + window)
-#     neighborhood = text_lower[left:right]
-#     return any(w in neighborhood for w in CONTEXT_WORDS)
+def _has_context(text_lower: str, start: int, end: int, window: int = 60) -> bool:
+    left = max(0, start - window)
+    right = min(len(text_lower), end + window)
+    neighborhood = text_lower[left:right]
+    return any(w in neighborhood for w in CONTEXT_WORDS)
 
 
 def extract_tickers_wsb(text: str) -> dict[str, str]:
