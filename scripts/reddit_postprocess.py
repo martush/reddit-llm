@@ -116,7 +116,7 @@ def assert_tickers_table_exists(con: duckdb.DuckDBPyConnection) -> None:
 
 
 # -------------------------
-# Extraction (WSB-safe)
+# Extraction
 # -------------------------
 
 # Capture tokens that could be tickers ($TSLA, TSLA, etc.) but do NOT uppercase the text first.
@@ -145,7 +145,9 @@ BLACKLIST = {
 }
 
 HIGH_FALSE_POSITIVE = {
+    "ICE",
     "NATO",
+    "UAE",
     "IBKR",
     "USA",
     "EU",

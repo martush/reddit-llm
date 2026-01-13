@@ -53,12 +53,10 @@ def read_query_df(sql: str, params=None, retries: int = 5, delay_s: float = 0.3)
 # ----------------------------
 
 def q_top_tickers(hours: int, limit: int) -> str:
-    # Guardrails:
-    # - hide 1-letter tickers unless $-prefixed
-    # - require presence across multiple threads to avoid NATO-style single-thread dominance
     return f"""
     SELECT
       ct.ticker,
+      t.name AS company_name,
       SUM(c.score) AS score_weighted,
       COUNT(DISTINCT ct.comment_id) AS unique_comments,
       COUNT(DISTINCT c.post_id) AS threads,
@@ -66,13 +64,16 @@ def q_top_tickers(hours: int, limit: int) -> str:
       SUM(ct.direction='bearish') AS bearish
     FROM comment_tickers ct
     JOIN comments c ON c.comment_id = ct.comment_id
+    LEFT JOIN tickers t
+      ON t.ticker = ct.ticker
     WHERE c.created_utc >= NOW() - INTERVAL '{hours} hours'
       AND (LENGTH(ct.ticker) >= 2 OR ct.method='dollar')
-    GROUP BY ct.ticker
+    GROUP BY ct.ticker, t.name
     HAVING threads >= 2 AND unique_comments >= 5
     ORDER BY score_weighted DESC
     LIMIT {limit};
     """
+
 
 
 def q_top_posts(hours: int, limit: int) -> str:
@@ -94,7 +95,6 @@ def q_top_posts(hours: int, limit: int) -> str:
 
 
 def q_ticker_dropdown(hours: int) -> str:
-    # Populate dropdown from what you actually have recently
     return f"""
     WITH recent AS (
       SELECT DISTINCT ct.ticker
@@ -103,14 +103,18 @@ def q_ticker_dropdown(hours: int) -> str:
       WHERE c.created_utc >= NOW() - INTERVAL '{hours} hours'
         AND (LENGTH(ct.ticker) >= 2 OR ct.method='dollar')
     )
-    SELECT ticker
-    FROM recent
-    ORDER BY ticker;
+    SELECT
+      r.ticker,
+      t.name AS company_name
+    FROM recent r
+    LEFT JOIN tickers t
+      ON t.ticker = r.ticker
+    ORDER BY r.ticker;
     """
 
 
+
 def q_posts_for_ticker(hours: int) -> str:
-    # Uses post_tickers if you have it. If you don’t, tell me and we’ll do a join via comments only.
     return f"""
     SELECT
       p.subreddit,
@@ -149,8 +153,9 @@ def q_comments_for_ticker(hours: int) -> str:
 # Dash app
 # ----------------------------
 
-app = dash.Dash(__name__)
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
+
 
 def make_markdown_link(url: str, text: str) -> str:
     # Dash DataTable supports Markdown if presentation="markdown"
@@ -189,9 +194,7 @@ app.layout = html.Div(
             ]
         ),
 
-        html.Div(id="tab-content", style={"marginTop": "16px"}),
-
-        html.Div(id="status", style={"marginTop": "12px", "opacity": 0.8})
+        html.Div(id="tab-content", style={"marginTop": "16px"})
     ]
 )
 
@@ -275,7 +278,6 @@ def render_tab(tab):
     Output("bar_posts", "figure"),
     Output("table_posts", "data"),
     Output("table_posts", "columns"),
-    Output("status", "children"),
     Input("refresh", "n_clicks"),
     Input("hours", "value"),
     Input("limit", "value"),
@@ -284,7 +286,7 @@ def render_tab(tab):
 def refresh_overview(_n, hours, limit, tab):
     # Only refresh when on overview tab
     if tab != "tab-overview":
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     try:
         hours = int(hours)
@@ -293,7 +295,22 @@ def refresh_overview(_n, hours, limit, tab):
         df_comments = read_query_df(q_top_tickers(hours, limit))
         df_posts = read_query_df(q_top_posts(hours, limit))
 
-        fig_comments = px.bar(df_comments, x="ticker", y="score_weighted") if not df_comments.empty else px.bar(pd.DataFrame())
+        #fig_comments = px.bar(df_comments, x="ticker", y="score_weighted") if not df_comments.empty else px.bar(pd.DataFrame())
+        x_col = "ticker"
+        if "company_name" in df_comments.columns and df_comments["company_name"].notna().any():
+            df_comments = df_comments.copy()
+            df_comments["label"] = df_comments.apply(
+                lambda r: f'{r["ticker"]} — {r["company_name"]}' if pd.notna(r["company_name"]) else r["ticker"],
+                axis=1
+            )
+            x_col = "label"
+
+        if df_comments.empty:
+            fig_comments = px.bar(pd.DataFrame({"ticker": [], "score_weighted": []}), x="ticker", y="score_weighted")
+        else:
+            fig_comments = px.bar(df_comments, x=x_col, y="score_weighted")
+
+
         fig_posts = px.bar(df_posts, x="title", y="num_comments") if not df_posts.empty else px.bar(pd.DataFrame())
         fig_posts.update_layout(xaxis_title="post", yaxis_title="num_comments")
 
@@ -311,20 +328,21 @@ def refresh_overview(_n, hours, limit, tab):
             else:
                 posts_cols.append({"name": c, "id": c})
 
-        status = f"OK. DB: {DB_PATH}"
         return (
             fig_comments,
             df_comments.to_dict("records"),
             comments_cols,
             fig_posts,
             df_posts.to_dict("records"),
-            posts_cols,
-            status
+            posts_cols
         )
+
     except Exception as e:
+        print("refresh_overview error:", repr(e))
         empty = pd.DataFrame()
         fig_empty = px.bar(empty)
-        return fig_empty, [], [], fig_empty, [], [], f"Error: {e}"
+        return fig_empty, [], [], fig_empty, [], []
+
 
 
 # ----------------------------
@@ -342,9 +360,18 @@ def populate_ticker_options(tab, hours, _n):
     try:
         hours = int(hours)
         df = read_query_df(q_ticker_dropdown(hours))
-        return [{"label": t, "value": t} for t in df["ticker"].tolist()]
-    except Exception:
+        #return [{"label": t, "value": t} for t in df["ticker"].tolist()]
+        opts = []
+        for _, row in df.iterrows():
+            label = row["ticker"]
+            if row.get("company_name"):
+                label = f'{row["ticker"]} — {row["company_name"]}'
+            opts.append({"label": label, "value": row["ticker"]})
+        return opts
+    except Exception as e:
+        print("populate_ticker_options error:", repr(e))
         return []
+
 
 
 @app.callback(
