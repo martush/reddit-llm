@@ -16,29 +16,29 @@ def get_paths():
     return base_dir, db_path
 
 
-def ensure_queue(con: duckdb.DuckDBPyConnection) -> None:
+def ensure_queue(con: duckdb.DuckDBPyConnection):
     con.execute("""
     CREATE TABLE IF NOT EXISTS embedding_queue (
-      doc_id TEXT PRIMARY KEY,
-      source_type TEXT NOT NULL,
-      post_id TEXT,
-      comment_id TEXT,
-      subreddit TEXT,
-      created_utc TIMESTAMP,
-      score BIGINT,
-      num_comments BIGINT,
-      url TEXT,
-      title TEXT,
-      text TEXT NOT NULL,
-      char_len BIGINT NOT NULL,
-      inserted_at TIMESTAMP DEFAULT NOW(),
-      embedded BOOLEAN DEFAULT FALSE,
-      embedded_at TIMESTAMP
+      doc_id        TEXT PRIMARY KEY,
+      source_type   TEXT NOT NULL,
+      post_id       TEXT,
+      comment_id    TEXT,
+      subreddit     TEXT,
+      created_utc   TIMESTAMP,
+      score         BIGINT,
+      num_comments  BIGINT,
+      url           TEXT,
+      title         TEXT,
+      text          TEXT NOT NULL,
+      char_len      BIGINT NOT NULL,
+      inserted_at   TIMESTAMP DEFAULT NOW(),
+      embedded      BOOLEAN DEFAULT FALSE,
+      embedded_at   TIMESTAMP
     );
     """)
 
 
-def build_post_text(title: str | None, body: str | None) -> str:
+def build_post_text(title: str | None, body: str | None):
     title = (title or "").strip()
     body = (body or "").strip()
     if title and body:
@@ -49,25 +49,21 @@ def build_post_text(title: str | None, body: str | None) -> str:
 def main() -> int:
     _, db_path = get_paths()
 
-    # Tune via env if you want
+    # Tune via env
     lookback_hours = int(os.environ.get("EMBED_LOOKBACK_HOURS", "24"))
     top_posts_per_sub = int(os.environ.get("TOP_POSTS_PER_SUBREDDIT", "20"))
     top_comments_per_sub = int(os.environ.get("TOP_COMMENTS_PER_SUBREDDIT", "80"))
     min_comment_chars = int(os.environ.get("MIN_COMMENT_CHARS", "80"))
-    max_text_chars = int(os.environ.get("MAX_TEXT_CHARS", "6000"))  # truncate to keep embeddings cheap
+    max_text_chars = int(os.environ.get("MAX_TEXT_CHARS", "6000"))
 
     since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     con = duckdb.connect(str(db_path))
-    print('Connecting to duckdb')
+    print('Connected to duckdb')
     try:
         ensure_queue(con)
 
-        # --------
-        # POSTS
-        # --------
-        # We take top posts per subreddit by (num_comments, score)
-        # Use a window function to pick top N per subreddit.
+        # Take top posts per subreddit by (num_comments, score)
         posts = con.execute(f"""
             WITH ranked AS (
               SELECT
@@ -119,11 +115,7 @@ def main() -> int:
             ))
             inserted_posts += 1
 
-        # --------
-        # COMMENTS
-        # --------
         # Top comments per subreddit by score, excluding deleted/removed, enforcing min length.
-        print('getting comments')
         comments = con.execute(f"""
             WITH filtered AS (
               SELECT
@@ -157,7 +149,7 @@ def main() -> int:
                 text = text[:max_text_chars]
 
             doc_id = f"comment:{comment_id}"
-            # We can link comments to the post URL; comment permalinks require extra work.
+            # Add post url
             url = f"https://www.reddit.com/comments/{post_id}"
 
             con.execute("""
