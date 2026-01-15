@@ -1,0 +1,101 @@
+#Install nginx
+
+#Create nginx config file
+
+sudo nano /etc/nginx/sites-available/streamlit-reddit
+
+server {
+    listen 5000;
+    server_name martina.kibik.org;
+
+    # Increase buffer sizes for Streamlit
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8501;
+        proxy_http_version 1.1;
+        
+        # WebSocket support (critical for Streamlit)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Standard proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeouts
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable buffering for real-time updates
+        proxy_buffering off;
+    }
+
+    # Optional: serve static files directly if needed
+    location /_stcore/static {
+        proxy_pass http://127.0.0.1:8501/_stcore/static;
+    }
+}
+
+# Create streamlit config
+mkdir -p ~/.streamlit
+nano ~/.streamlit/config.toml
+
+[server]
+port = 8501
+address = "127.0.0.1"
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+serverAddress = "martina.kibik.org"
+serverPort = 5000
+gatherUsageStats = false
+
+
+# Create systemd service
+sudo nano /etc/systemd/system/streamlit-reddit.service
+
+[Unit]
+Description=Streamlit Reddit LLM Dashboard
+After=network.target nginx.service
+
+[Service]
+Type=simple
+User=martina
+Group=martina
+WorkingDirectory=/home/martina/Desktop/Git/reddit-llm/streamlit
+Environment="PATH=/home/martina/anaconda3/envs/reddit-llm/bin"
+ExecStart=/home/martina/anaconda3/envs/reddit-llm/bin/streamlit run app_streamlit.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+
+#Run
+sudo systemctl daemon-reload
+sudo systemctl enable streamlit-reddit
+sudo systemctl start streamlit-reddit
+sudo systemctl status streamlit-reddit
+
+
+# Restart Streamlit (after code changes)
+sudo systemctl restart streamlit-reddit
+
+# Stop Streamlit
+sudo systemctl stop streamlit-reddit
+
+# Check if it's running
+ps aux | grep streamlit
+sudo netstat -tlnp | grep 8501
+
+# If no systemd setup, run
+/home/martina/anaconda3/envs/reddit-llm/bin/streamlit run \
+  /home/martina/Desktop/Git/reddit-llm/streamlit/app_streamlit.py

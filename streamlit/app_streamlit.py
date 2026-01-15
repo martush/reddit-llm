@@ -8,6 +8,11 @@ import streamlit as st
 import plotly.express as px
 from dotenv import load_dotenv, find_dotenv
 
+import chromadb
+from sentence_transformers import SentenceTransformer
+import requests
+
+
 load_dotenv(find_dotenv(usecwd=False))
 
 BASE_DIR = Path(os.environ["BASE_DIR"]).expanduser().resolve()
@@ -19,7 +24,11 @@ if SNAP.exists():
     DB_PATH = SNAP
 
 
-def read_df(sql: str, params=None) -> pd.DataFrame:
+def read_df(sql, params=None):
+    '''
+    Function which reads an SQL statement and returns a df
+    '''
+
     with duckdb.connect(str(DB_PATH), read_only=True) as con:
         if params is None:
             return con.execute(sql).fetchdf()
@@ -27,14 +36,16 @@ def read_df(sql: str, params=None) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)  # cache for 60s
-def get_top_tickers(hours: int, limit: int) -> pd.DataFrame:
+def get_top_tickers(hours, limit):
     q = f"""
     SELECT
       ct.ticker,
       t.name AS company_name,
       SUM(c.score) AS score_weighted,
       COUNT(DISTINCT ct.comment_id) AS unique_comments,
-      COUNT(DISTINCT c.post_id) AS threads
+      COUNT(DISTINCT c.post_id) AS threads,
+      SUM(ct.direction='bullish') AS bullish,
+      SUM(ct.direction='bearish') AS bearish
     FROM comment_tickers ct
     JOIN comments c ON c.comment_id = ct.comment_id
     LEFT JOIN tickers t ON t.ticker = ct.ticker
@@ -49,7 +60,7 @@ def get_top_tickers(hours: int, limit: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def get_top_posts(hours: int, limit: int) -> pd.DataFrame:
+def get_top_posts(hours, limit):
     q = f"""
     SELECT
       p.subreddit,
@@ -70,7 +81,7 @@ def get_top_posts(hours: int, limit: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=120)
-def get_recent_tickers(hours: int) -> pd.DataFrame:
+def get_recent_tickers(hours):
     q = f"""
     WITH recent AS (
       SELECT DISTINCT ct.ticker
@@ -87,6 +98,44 @@ def get_recent_tickers(hours: int) -> pd.DataFrame:
     return read_df(q)
 
 
+
+# Cache the embedding model - loads once and reuses
+@st.cache_resource
+def load_embedder(model_name):
+    return SentenceTransformer(model_name)
+
+# Cache the ChromaDB client
+@st.cache_resource
+def get_chroma_client(chroma_dir):
+    return chromadb.PersistentClient(path=str(chroma_dir))
+
+
+def stream_ollama_response(ollama_host, llm_model, prompt):
+    """Stream response from Ollama"""
+    r = requests.post(
+        f"{ollama_host}/api/generate",
+        json={
+            "model": llm_model,
+            "prompt": prompt,
+            "stream": True,
+            "options": {
+                "num_predict": 500,
+                "temperature": 0.7,
+            }
+        },
+        stream=True,
+        timeout=180,
+    )
+    r.raise_for_status()
+    
+    for line in r.iter_lines():
+        if line:
+            import json
+            chunk = json.loads(line)
+            if "response" in chunk:
+                yield chunk["response"]
+
+
 def main():
     st.set_page_config(page_title="Reddit Stock Monitor", layout="wide")
     st.title("Reddit Stock Monitor")
@@ -94,9 +143,21 @@ def main():
     with st.sidebar:
         hours = st.slider("Lookback (hours)", min_value=6, max_value=168, step=6, value=24)
         limit = st.number_input("Limit", min_value=5, max_value=100, step=5, value=20)
-        st.caption(f"DB: {DB_PATH}")
+        #st.caption(f"DB: {DB_PATH}")
 
-    tab1, tab2 = st.tabs(["Overview", "Ticker drill-down"])
+    # Increase font size of tabs
+    st.markdown("""
+    <style>
+    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        font-size: 20px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Set up tabs
+    tab1, tab2, tab3 = st.tabs(["Overview", "Ticker drill-down", "Ask AI"])
+
+
 
     with tab1:
         st.subheader("Top tickers (comments, score-weighted)")
@@ -104,13 +165,15 @@ def main():
         if df_t.empty:
             st.info("No ticker data yet. Run scraper + postprocess.")
         else:
-            df_t["label"] = df_t.apply(
+            df_t_graph = df_t.copy()
+            df_t_graph["label"] = df_t.apply(
                 lambda r: f'{r["ticker"]} — {r["company_name"]}' if pd.notna(r["company_name"]) else r["ticker"],
                 axis=1
             )
-            fig = px.bar(df_t, x="label", y="score_weighted")
+            fig = px.bar(df_t_graph, x="label", y="score_weighted")
             st.plotly_chart(fig, width='stretch')
             st.dataframe(df_t)
+
 
         st.subheader("Top posts (by comment count)")
         df_p = get_top_posts(hours, limit)
@@ -196,6 +259,114 @@ def main():
         df_tc = read_df(q_com, [ticker])
         st.markdown("### Top comments mentioning this ticker")
         st.dataframe(df_tc)
+
+
+    with tab3:
+        st.header("Ask AI about Reddit Sentiment")
+        
+        # Load environment variables
+        base_dir = Path(os.environ["BASE_DIR"]).expanduser().resolve()
+        chroma_dir = Path(os.environ.get("CHROMA_DIR", base_dir / "data" / "chroma")).expanduser().resolve()
+        collection_name = os.environ.get("CHROMA_COLLECTION", "reddit_high_engagement")
+        embed_model_name = os.environ.get("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+        #llm_model = os.environ.get("LLM_MODEL", "llama3.1:8b")
+        llm_model = os.environ.get("LLM_MODEL", "llama3.2:3b")
+    
+        # Input
+        question = st.text_input(
+            "Ask a question about Reddit sentiment:",
+            placeholder="e.g., What are people saying about TSLA this week?"
+        )
+        
+        # Add options for faster responses
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            num_results = st.selectbox("\\# of sources", [3, 5, 8], index=0)
+
+        if st.button("Ask", type="primary"):
+            if not question:
+                st.warning("Please enter a question")
+            else:
+                with st.spinner("Searching and generating answer... (DMS new pc for Marty)"):
+                    try:
+                        # Use the cached embedder
+                        embedder = load_embedder(embed_model_name)
+                        q_emb = embedder.encode([question], normalize_embeddings=True).tolist()[0]
+                        
+                        # Use cached client
+                        client = get_chroma_client(chroma_dir)
+                        col = client.get_collection(collection_name)
+                        res = col.query(
+                            query_embeddings = [q_emb], 
+                            n_results        = num_results, 
+                            include          = ["documents", "metadatas"]
+                        )
+                        docs  = res["documents"][0]
+                        metas = res["metadatas"][0]
+                        
+                        # Build context with citations (limit doc length)
+                        context_blocks = []
+                        for i, (doc, meta) in enumerate(zip(docs, metas), start=1):
+                            url = meta.get("url", "")
+                            subreddit = meta.get("subreddit", "")
+                            score = meta.get("score", 0)
+                            title = meta.get("title", "")
+                            header = f"[{i}] subreddit={subreddit} score={score} url={url}"
+                            if title:
+                                header += f" title={title}"
+                            # Limit doc length to reduce token count
+                            truncated_doc = doc[:1000] if len(doc) > 1000 else doc
+                            context_blocks.append(header + "\n" + truncated_doc)
+                            
+                        context = "\n\n---\n\n".join(context_blocks)
+                        
+                        prompt = f"""You are summarizing and answering questions using Reddit content.
+                                Use ONLY the context below. If you are unsure, say so.
+                                When you make a claim, cite sources like [1], [2] based on the context items.
+
+                                QUESTION:
+                                {question}
+
+                                CONTEXT:
+                                {context}
+
+                                ANSWER (with citations):
+                                """
+                        
+                        # Display streaming response
+                        st.subheader("Answer:")
+                        response_placeholder = st.empty()
+                        full_response = ""
+
+                        try:
+                            for token in stream_ollama_response(ollama_host, llm_model, prompt):
+                                full_response += token
+                                response_placeholder.write(full_response)
+                        except Exception as e:
+                            st.error(f"Error: {str(e)}")
+
+                        
+                        # Display sources
+                        st.subheader("Sources:")
+                        for i, meta in enumerate(metas, start=1):
+                            url = meta.get("url", "")
+                            title = meta.get("title", "")
+                            subreddit = meta.get("subreddit", "")
+                            score = meta.get("score", 0)
+                            
+                            with st.expander(f"[{i}] {title[:100]}... (score: {score})"):
+                                st.write(f"**Subreddit:** r/{subreddit}")
+                                st.write(f"**Score:** {score}")
+                                st.write(f"**URL:** {url}")
+                                st.write(f"**Content:** {docs[i-1][:500]}...")
+                    
+                    except requests.exceptions.Timeout:
+                        st.error("Request timed out. Try asking a simpler question or use fewer sources.")
+
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+
 
 if __name__ == "__main__":
     main()

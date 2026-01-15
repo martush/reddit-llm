@@ -21,7 +21,7 @@ def main() -> int:
     collection_name = os.environ.get("CHROMA_COLLECTION", "reddit_high_engagement")
     batch_size = int(os.environ.get("EMBED_BATCH_SIZE", "200"))
 
-    # Good, small, fast model
+    # Select an embedding model
     model_name = os.environ.get("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     model = SentenceTransformer(model_name)
 
@@ -48,23 +48,24 @@ def main() -> int:
          score, num_comments, url, title, text) in rows:
         ids.append(doc_id)
         docs.append(text)
+        # create metadata for each doc to embed
         metas.append({
-            "source_type": source_type,
-            "post_id": post_id or "",
-            "comment_id": comment_id or "",
-            "subreddit": subreddit or "",
-            "created_utc": str(created_utc) if created_utc is not None else "",
-            "score": int(score) if score is not None else 0,
-            "num_comments": int(num_comments) if num_comments is not None else 0,
-            "url": url or "",
-            "title": title or "",
+            "source_type"  : source_type,
+            "post_id"      : post_id or "",
+            "comment_id"   : comment_id or "",
+            "subreddit"    : subreddit or "",
+            "created_utc"  : str(created_utc) if created_utc is not None else "",
+            "score"        : int(score) if score is not None else 0,
+            "num_comments" : int(num_comments) if num_comments is not None else 0,
+            "url"          : url or "",
+            "title"        : title or "",
         })
 
     embs = model.encode(docs, normalize_embeddings=True).tolist()
 
     col.upsert(ids=ids, documents=docs, embeddings=embs, metadatas=metas)
 
-    # Mark embedded (write mode)
+    # Mark embedded in db table
     with duckdb.connect(str(db_path)) as conw:
         conw.executemany(
             "UPDATE embedding_queue SET embedded=TRUE, embedded_at=NOW() WHERE doc_id=?",
