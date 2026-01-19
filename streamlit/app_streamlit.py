@@ -6,22 +6,36 @@ import duckdb
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 from dotenv import load_dotenv, find_dotenv
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 import requests
+import logging
 
+from finance_utils import get_multiple_tickers_summary, get_ticker_data, format_market_cap, format_volume
 
+#Find env file
 load_dotenv(find_dotenv(usecwd=False))
 
+# Set up basic paths
 BASE_DIR = Path(os.environ["BASE_DIR"]).expanduser().resolve()
 DB_PATH = Path(os.environ.get("DB_PATH", BASE_DIR / "data" / "reddit.duckdb")).expanduser().resolve()
 
-# Use after adding the snapshot version
-SNAP = BASE_DIR / "data" / "reddit_snapshot.duckdb"
-if SNAP.exists():
-    DB_PATH = SNAP
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        #logging.FileHandler(f'{BASE_DIR}/streamlit/streamlit_app.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
 
 
 def read_df(sql, params=None):
@@ -56,6 +70,8 @@ def get_top_tickers(hours, limit):
     ORDER BY score_weighted DESC
     LIMIT {limit};
     """
+    logger.debug('Query get_top_tickers')
+    logger.debug(q)
     return read_df(q)
 
 
@@ -75,6 +91,8 @@ def get_top_posts(hours, limit):
     LIMIT {limit};
     """
     df = read_df(q)
+    logger.debug('Query get_top_posts')
+    logger.debug(q)
     if not df.empty:
         df["reddit_url"] = df["reddit_url"].astype(str)
     return df
@@ -95,6 +113,8 @@ def get_recent_tickers(hours):
     LEFT JOIN tickers t ON t.ticker = r.ticker
     ORDER BY r.ticker;
     """
+    logger.debug('Query get_recent_tickers')
+    logger.debug(q)
     return read_df(q)
 
 
@@ -127,13 +147,14 @@ def stream_ollama_response(ollama_host, llm_model, prompt):
         timeout=180,
     )
     r.raise_for_status()
-    
+    logger.debug('Iterating over Ollama response')
     for line in r.iter_lines():
         if line:
             import json
             chunk = json.loads(line)
             if "response" in chunk:
                 yield chunk["response"]
+
 
 
 def main():
@@ -144,6 +165,8 @@ def main():
         hours = st.slider("Lookback (hours)", min_value=6, max_value=168, step=6, value=24)
         limit = st.number_input("Limit", min_value=5, max_value=100, step=5, value=20)
         #st.caption(f"DB: {DB_PATH}")
+        fin_data_period = st.selectbox("Price and volume period", ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'))
+        logger.debug(f'Fin data selection {fin_data_period}')
 
     # Increase font size of tabs
     st.markdown("""
@@ -158,7 +181,7 @@ def main():
     tab1, tab2, tab3 = st.tabs(["Overview", "Ticker drill-down", "Ask AI"])
 
 
-
+    ################# Tab 1 ##########################
     with tab1:
         st.subheader("Top tickers (comments, score-weighted)")
         df_t = get_top_tickers(hours, limit)
@@ -173,7 +196,6 @@ def main():
             fig = px.bar(df_t_graph, x="label", y="score_weighted")
             st.plotly_chart(fig, width='stretch')
             st.dataframe(df_t)
-
 
         st.subheader("Top posts (by comment count)")
         df_p = get_top_posts(hours, limit)
@@ -191,6 +213,28 @@ def main():
                 width="stretch",
             )
 
+
+        # Fetch financial data
+        top_tickers = df_t['ticker'].to_list()
+        with st.spinner("Fetching market data"):
+            ticker_summary = get_multiple_tickers_summary(top_tickers, period=fin_data_period)
+
+        if not ticker_summary.empty:
+            # Display as a styled dataframe
+            st.dataframe(
+                ticker_summary.style.format({
+                    'Price': '${:.2f}',
+                    'Change': '${:.2f}',
+                    'Change %': '{:.2f}%',
+                    'Volume': lambda x: format_volume(x),
+                    'Avg Volume': lambda x: format_volume(x),
+                    'Market Cap': lambda x: format_market_cap(x),
+                }).background_gradient(subset=['Change %'], cmap='RdYlGn', vmin=-5, vmax=5),
+                use_container_width=True,
+                hide_index=True
+            )
+
+    ################# Tab 2 ##########################
     with tab2:
         st.subheader("Drill-down")
         recent = get_recent_tickers(hours)
@@ -261,6 +305,99 @@ def main():
         st.dataframe(df_tc)
 
 
+    # Ticker Drilldown Section
+    # if ticker:
+    #     col1, col2 = st.columns([2, 1])
+        
+    #     with col1:
+    #         st.subheader(f"{ticker} Price Chart")
+            
+    #         # Time period selector
+    #         period = st.radio(
+    #             "Time Period:",
+    #             options=['1mo', '3mo', '6mo', '1y'],
+    #             horizontal=True,
+    #             index=0
+    #         )
+            
+    #         # Get price data
+    #         ticker_data = get_ticker_data(ticker, period=period)
+            
+    #         if ticker_data is not None and not ticker_data.empty:
+    #             # Create candlestick chart
+    #             fig = go.Figure(data=[go.Candlestick(
+    #                 x=ticker_data.index,
+    #                 open=ticker_data['Open'],
+    #                 high=ticker_data['High'],
+    #                 low=ticker_data['Low'],
+    #                 close=ticker_data['Close'],
+    #                 name='Price'
+    #             )])
+                
+    #             fig.update_layout(
+    #                 title=f'{ticker} Price Movement',
+    #                 yaxis_title='Price ($)',
+    #                 xaxis_title='Date',
+    #                 height=400,
+    #                 hovermode='x unified'
+    #             )
+                
+    #             st.plotly_chart(fig, use_container_width=True)
+                
+    #             # Volume chart
+    #             fig_volume = go.Figure(data=[go.Bar(
+    #                 x=ticker_data.index,
+    #                 y=ticker_data['Volume'],
+    #                 name='Volume',
+    #                 marker_color='lightblue'
+    #             )])
+                
+    #             fig_volume.update_layout(
+    #                 title=f'{ticker} Trading Volume',
+    #                 yaxis_title='Volume',
+    #                 xaxis_title='Date',
+    #                 height=300,
+    #                 hovermode='x unified'
+    #             )
+                
+    #             st.plotly_chart(fig_volume, use_container_width=True)
+    
+    #     with col2:
+    #         st.subheader("Key Metrics")
+            
+    #         info = get_ticker_info(ticker)
+            
+    #         # Display metrics
+    #         st.metric(
+    #             label="Current Price",
+    #             value=f"${info['current_price']:.2f}",
+    #             delta=f"{(info['current_price'] - info['previous_close']):.2f} ({((info['current_price'] - info['previous_close']) / info['previous_close'] * 100):.2f}%)"
+    #         )
+            
+    #         st.metric(
+    #             label="Volume",
+    #             value=format_volume(info['volume']),
+    #             delta=f"{((info['volume'] - info['avg_volume']) / info['avg_volume'] * 100):.1f}% vs avg" if info['avg_volume'] > 0 else None
+    #         )
+            
+    #         st.metric(
+    #             label="Market Cap",
+    #             value=format_market_cap(info['market_cap'])
+    #         )
+            
+    #         st.metric(
+    #             label="Avg Volume (3mo)",
+    #             value=format_volume(info['avg_volume'])
+    #         )
+            
+    #         # Show Reddit sentiment alongside
+    #         st.subheader("Reddit Sentiment")
+    #         # Add your sentiment data here from DuckDB
+    #         # sentiment = get_sentiment_for_ticker(selected_ticker)
+    #         st.write("Bullish mentions: X")
+    #         st.write("Bearish mentions: Y")
+
+    ################# Tab 3 ##########################
     with tab3:
         st.header("Ask AI about Reddit Sentiment")
         
@@ -294,7 +431,7 @@ def main():
                         embedder = load_embedder(embed_model_name)
                         q_emb = embedder.encode([question], normalize_embeddings=True).tolist()[0]
                         
-                        # Use cached client
+                        # Get Chroma client to retrieve relevant # results (depending on user choice)
                         client = get_chroma_client(chroma_dir)
                         col = client.get_collection(collection_name)
                         res = col.query(
