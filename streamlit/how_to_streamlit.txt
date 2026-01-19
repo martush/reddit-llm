@@ -69,7 +69,7 @@ User=martina
 Group=martina
 WorkingDirectory=/home/martina/Desktop/Git/reddit-llm/streamlit
 Environment="PATH=/home/martina/anaconda3/envs/reddit-llm/bin"
-ExecStart=/home/martina/anaconda3/envs/reddit-llm/bin/streamlit run app_streamlit.py
+ExecStart=/home/martina/anaconda3/envs/reddit-llm/bin/streamlit run app_streamlit.py  --server.address 0.0.0.0   --server.port 5000
 Restart=always
 RestartSec=3
 StandardOutput=journal
