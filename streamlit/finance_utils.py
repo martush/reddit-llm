@@ -64,18 +64,24 @@ def get_multiple_tickers_summary(tickers, period="1mo"):
         df = get_ticker_data(ticker, period=period)
         
         if df is not None and not df.empty:
-            price_change = info['current_price'] - info['previous_close']
-            price_change_pct = (price_change / info['previous_close'] * 100) if info['previous_close'] > 0 else 0
+            #price_change = info['current_price'] - info['previous_close']
+            # Price change for selected period
+            price_change = df.loc[df.index.max(), 'Close'] - df.loc[df.index.min(), 'Close']
+            price_change_pct = (price_change / df.loc[df.index.min(), 'Close'] * 100) if df.loc[df.index.min(), 'Close'] > 0 else 0
             
+            # Volume traded for period
+            volume = df['Volume'].sum()
+
             results.append({
-                'Ticker': ticker,
-                'Name': info['name'],
-                'Price': info['current_price'],
-                'Change': price_change,
-                'Change %': price_change_pct,
-                'Volume': info['volume'],
-                'Avg Volume': info['avg_volume'],
-                'Market Cap': info['market_cap'],
+                'Ticker'            : ticker,
+                'Name'              : info['name'],
+                'Price'             : info['current_price'],
+                'Change'            : price_change,
+                'Change %'          : price_change_pct,
+                'Volume'            : info['volume'],
+                'Volume for period' : volume,
+                'Avg Volume'        : info['avg_volume'],
+                'Market Cap'        : info['market_cap'],
             })
     
     return pd.DataFrame(results)

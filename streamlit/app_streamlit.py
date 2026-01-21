@@ -14,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 import requests
 import logging
 
-from finance_utils import get_multiple_tickers_summary, get_ticker_data, format_market_cap, format_volume
+from finance_utils import get_multiple_tickers_summary, get_ticker_data, format_market_cap, format_volume, get_ticker_info
 
 #Find env file
 load_dotenv(find_dotenv(usecwd=False))
@@ -223,12 +223,13 @@ def main():
             # Display as a styled dataframe
             st.dataframe(
                 ticker_summary.style.format({
-                    'Price': '${:.2f}',
-                    'Change': '${:.2f}',
-                    'Change %': '{:.2f}%',
-                    'Volume': lambda x: format_volume(x),
-                    'Avg Volume': lambda x: format_volume(x),
-                    'Market Cap': lambda x: format_market_cap(x),
+                    'Price'             : '${:.2f}',
+                    'Change'            : '${:.2f}',
+                    'Change %'          : '{:.2f}%',
+                    'Volume'            : lambda x: format_volume(x),
+                    'Volume for period' : lambda x: format_volume(x),
+                    'Avg Volume'        : lambda x: format_volume(x),
+                    'Market Cap'        : lambda x: format_market_cap(x),
                 }).background_gradient(subset=['Change %'], cmap='RdYlGn', vmin=-5, vmax=5),
                 use_container_width=True,
                 hide_index=True
@@ -237,7 +238,9 @@ def main():
     ################# Tab 2 ##########################
     with tab2:
         st.subheader("Drill-down")
-        recent = get_recent_tickers(hours)
+        # Hardcode to 1 week
+        #recent = get_recent_tickers(hours)
+        recent = get_recent_tickers(168)
         if recent.empty:
             st.info("No tickers found in the selected window.")
             return
@@ -281,9 +284,21 @@ def main():
         if df_tp.empty:
             st.write("No posts.")
         else:
-            st.dataframe(df_tp)
-            for _, r in df_tp.head(10).iterrows():
-                st.markdown(f"- [{r['title']}]({r['reddit_url']})")
+            df_tp["reddit_url"] = df_tp["reddit_url"].astype(str)
+
+            # st.dataframe(df_tp)
+            # for _, r in df_tp.head(10).iterrows():
+            #     st.markdown(f"- [{r['title']}]({r['reddit_url']})")
+
+            df_tp = df_tp.rename(columns={"reddit_url": "link"})
+            st.data_editor(
+                df_tp,
+                column_config={
+                    "link": st.column_config.LinkColumn("reddit link"),
+                },
+                disabled=True,
+                width="stretch",
+            )    
 
         # Comments mentioning ticker
         q_com = f"""
@@ -305,97 +320,98 @@ def main():
         st.dataframe(df_tc)
 
 
-    # Ticker Drilldown Section
-    # if ticker:
-    #     col1, col2 = st.columns([2, 1])
+        # Ticker Drilldown Section
+        if ticker:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.subheader(f"{ticker} Price Chart")
+                
+                # Time period selector
+                period = st.radio(
+                    "Time Period:",
+                    options=['1mo', '3mo', '6mo', '1y'],
+                    horizontal=True,
+                    index=0
+                )
+                
+                # Get price data
+                ticker_data = get_ticker_data(ticker, period=period)
+                
+                if ticker_data is not None and not ticker_data.empty:
+                    # Create candlestick chart
+                    fig = go.Figure(data=[go.Candlestick(
+                        x=ticker_data.index,
+                        open=ticker_data['Open'],
+                        high=ticker_data['High'],
+                        low=ticker_data['Low'],
+                        close=ticker_data['Close'],
+                        name='Price'
+                    )])
+                    
+                    fig.update_layout(
+                        title=f'{ticker} Price Movement',
+                        yaxis_title='Price ($)',
+                        xaxis_title='Date',
+                        height=400,
+                        hovermode='x unified',
+                        xaxis_rangeslider_visible=False
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Volume chart
+                    fig_volume = go.Figure(data=[go.Bar(
+                        x=ticker_data.index,
+                        y=ticker_data['Volume'],
+                        name='Volume',
+                        marker_color='lightblue'
+                    )])
+                    
+                    fig_volume.update_layout(
+                        title=f'{ticker} Trading Volume',
+                        yaxis_title='Volume',
+                        xaxis_title='Date',
+                        height=300,
+                        hovermode='x unified'
+                    )
+                    
+                    st.plotly_chart(fig_volume, use_container_width=True)
         
-    #     with col1:
-    #         st.subheader(f"{ticker} Price Chart")
-            
-    #         # Time period selector
-    #         period = st.radio(
-    #             "Time Period:",
-    #             options=['1mo', '3mo', '6mo', '1y'],
-    #             horizontal=True,
-    #             index=0
-    #         )
-            
-    #         # Get price data
-    #         ticker_data = get_ticker_data(ticker, period=period)
-            
-    #         if ticker_data is not None and not ticker_data.empty:
-    #             # Create candlestick chart
-    #             fig = go.Figure(data=[go.Candlestick(
-    #                 x=ticker_data.index,
-    #                 open=ticker_data['Open'],
-    #                 high=ticker_data['High'],
-    #                 low=ticker_data['Low'],
-    #                 close=ticker_data['Close'],
-    #                 name='Price'
-    #             )])
+            with col2:
+                st.subheader("Key Metrics")
                 
-    #             fig.update_layout(
-    #                 title=f'{ticker} Price Movement',
-    #                 yaxis_title='Price ($)',
-    #                 xaxis_title='Date',
-    #                 height=400,
-    #                 hovermode='x unified'
-    #             )
+                info = get_ticker_info(ticker)
                 
-    #             st.plotly_chart(fig, use_container_width=True)
+                # Display metrics
+                st.metric(
+                    label="Current Price",
+                    value=f"${info['current_price']:.2f}",
+                    delta=f"{(info['current_price'] - info['previous_close']):.2f} ({((info['current_price'] - info['previous_close']) / info['previous_close'] * 100):.2f}%) vs previous close"
+                )
                 
-    #             # Volume chart
-    #             fig_volume = go.Figure(data=[go.Bar(
-    #                 x=ticker_data.index,
-    #                 y=ticker_data['Volume'],
-    #                 name='Volume',
-    #                 marker_color='lightblue'
-    #             )])
+                st.metric(
+                    label="Volume",
+                    value=format_volume(info['volume']),
+                    delta=f"{((info['volume'] - info['avg_volume']) / info['avg_volume'] * 100):.1f}% vs avg" if info['avg_volume'] > 0 else None
+                )
                 
-    #             fig_volume.update_layout(
-    #                 title=f'{ticker} Trading Volume',
-    #                 yaxis_title='Volume',
-    #                 xaxis_title='Date',
-    #                 height=300,
-    #                 hovermode='x unified'
-    #             )
+                st.metric(
+                    label="Market Cap",
+                    value=format_market_cap(info['market_cap'])
+                )
                 
-    #             st.plotly_chart(fig_volume, use_container_width=True)
-    
-    #     with col2:
-    #         st.subheader("Key Metrics")
-            
-    #         info = get_ticker_info(ticker)
-            
-    #         # Display metrics
-    #         st.metric(
-    #             label="Current Price",
-    #             value=f"${info['current_price']:.2f}",
-    #             delta=f"{(info['current_price'] - info['previous_close']):.2f} ({((info['current_price'] - info['previous_close']) / info['previous_close'] * 100):.2f}%)"
-    #         )
-            
-    #         st.metric(
-    #             label="Volume",
-    #             value=format_volume(info['volume']),
-    #             delta=f"{((info['volume'] - info['avg_volume']) / info['avg_volume'] * 100):.1f}% vs avg" if info['avg_volume'] > 0 else None
-    #         )
-            
-    #         st.metric(
-    #             label="Market Cap",
-    #             value=format_market_cap(info['market_cap'])
-    #         )
-            
-    #         st.metric(
-    #             label="Avg Volume (3mo)",
-    #             value=format_volume(info['avg_volume'])
-    #         )
-            
-    #         # Show Reddit sentiment alongside
-    #         st.subheader("Reddit Sentiment")
-    #         # Add your sentiment data here from DuckDB
-    #         # sentiment = get_sentiment_for_ticker(selected_ticker)
-    #         st.write("Bullish mentions: X")
-    #         st.write("Bearish mentions: Y")
+                st.metric(
+                    label="Avg Volume (3mo)",
+                    value=format_volume(info['avg_volume'])
+                )
+                
+                # Show Reddit sentiment alongside
+                st.subheader("Reddit Sentiment")
+                # Add your sentiment data here from DuckDB
+                # sentiment = get_sentiment_for_ticker(selected_ticker)
+                st.write("Bullish mentions: X")
+                st.write("Bearish mentions: Y")
 
     ################# Tab 3 ##########################
     with tab3:
@@ -425,7 +441,7 @@ def main():
             if not question:
                 st.warning("Please enter a question")
             else:
-                with st.spinner("Searching and generating answer... (DMS new pc for Marty)"):
+                with st.spinner("Searching and generating answer... (Marty accepting donations for a new pc)"):
                     try:
                         # Use the cached embedder
                         embedder = load_embedder(embed_model_name)
