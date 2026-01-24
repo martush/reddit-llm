@@ -70,7 +70,7 @@ def get_multiple_tickers_summary(tickers, period="1mo"):
             price_change_pct = (price_change / df.loc[df.index.min(), 'Close'] * 100) if df.loc[df.index.min(), 'Close'] > 0 else 0
             
             # Volume traded for period
-            volume = df['Volume'].sum()
+            #volume = df['Volume'].sum()
 
             results.append({
                 'Ticker'            : ticker,
@@ -79,7 +79,7 @@ def get_multiple_tickers_summary(tickers, period="1mo"):
                 'Change'            : price_change,
                 'Change %'          : price_change_pct,
                 'Volume'            : info['volume'],
-                'Volume for period' : volume,
+                #'Volume for period' : volume,
                 'Avg Volume'        : info['avg_volume'],
                 'Market Cap'        : info['market_cap'],
             })
