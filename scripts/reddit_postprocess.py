@@ -167,7 +167,7 @@ HIGH_FALSE_POSITIVE = {
 
 
 # Acronyms that are extremely common in discussion; treat as ticker only if $-prefixed
-RESERVED_ACRONYMS_REQUIRE_DOLLAR = {"AI"}
+RESERVED_ACRONYMS_REQUIRE_DOLLAR = {"AI", "TACO"}
 
 
 # Strong trading-intent words; used for short tickers

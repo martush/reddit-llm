@@ -165,7 +165,9 @@ def main():
         hours = st.slider("Lookback (hours)", min_value=6, max_value=168, step=6, value=24)
         limit = st.number_input("Limit", min_value=5, max_value=100, step=5, value=20)
         #st.caption(f"DB: {DB_PATH}")
-        fin_data_period = st.selectbox("Price and volume period", ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'))
+        fin_data_period = st.selectbox(label="Price change period", 
+                                       options=('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'),
+                                       index=2)
         logger.debug(f'Fin data selection {fin_data_period}')
 
     # Increase font size of tabs
@@ -228,7 +230,7 @@ def main():
                     'Change %'          : '{:.2f}%',
                     'Volume'            : lambda x: format_volume(x),
                     'Volume for period' : lambda x: format_volume(x),
-                    'Avg Volume'        : lambda x: format_volume(x),
+                    #'Avg Volume'        : lambda x: format_volume(x),
                     'Market Cap'        : lambda x: format_market_cap(x),
                 }).background_gradient(subset=['Change %'], cmap='RdYlGn', vmin=-5, vmax=5),
                 use_container_width=True,
