@@ -443,7 +443,7 @@ def main():
             if not question:
                 st.warning("Please enter a question")
             else:
-                with st.spinner("Searching and generating answer... (Marty accepting donations for a new pc)"):
+                with st.spinner("Searching and generating answer... "):
                     try:
                         # Use the cached embedder
                         embedder = load_embedder(embed_model_name)
