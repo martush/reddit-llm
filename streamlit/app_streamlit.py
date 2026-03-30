@@ -409,11 +409,11 @@ def main():
                 )
                 
                 # Show Reddit sentiment alongside
-                st.subheader("Reddit Sentiment")
+                #st.subheader("Reddit Sentiment")
                 # Add your sentiment data here from DuckDB
                 # sentiment = get_sentiment_for_ticker(selected_ticker)
-                st.write("Bullish mentions: X")
-                st.write("Bearish mentions: Y")
+                #st.write("Bullish mentions: X")
+                #st.write("Bearish mentions: Y")
 
     ################# Tab 3 ##########################
     with tab3:
@@ -515,6 +515,8 @@ def main():
                                 st.write(f"**Score:** {score}")
                                 st.write(f"**URL:** {url}")
                                 st.write(f"**Content:** {docs[i-1][:500]}...")
+
+                        st.text("Please note this is a small model running locally - quality of the input analysis is not optimal.")
                     
                     except requests.exceptions.Timeout:
                         st.error("Request timed out. Try asking a simpler question or use fewer sources.")
