@@ -20,55 +20,11 @@ from __future__ import annotations
 import os
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import duckdb
 from dotenv import load_dotenv, find_dotenv
-
-
-# -------------------------
-# Config
-# -------------------------
-
-@dataclass(frozen=True)
-class Config:
-    base_dir: Path
-    db_path: Path
-    lookback_hours: int
-    min_comment_len: int
-    min_comment_score: int
-    verbose: bool
-
-
-def load_config() -> Config:
-    dotenv_path = find_dotenv(usecwd=False)
-    if not dotenv_path:
-        raise RuntimeError("Could not find .env")
-
-    load_dotenv(dotenv_path)
-
-    base_dir_str = os.environ.get("BASE_DIR")
-    if not base_dir_str:
-        raise RuntimeError("Missing BASE_DIR in .env (e.g. BASE_DIR=/home/martina/Desktop/Git/reddit-llm)")
-
-    base_dir = Path(base_dir_str).expanduser().resolve()
-    db_path = Path(os.environ.get("DB_PATH", str(base_dir / "data" / "reddit.duckdb"))).expanduser().resolve()
-
-    lookback_hours = int(os.environ.get("LOOKBACK_HOURS", "36"))
-    min_comment_len = int(os.environ.get("MIN_COMMENT_LEN", "20"))
-    min_comment_score = int(os.environ.get("MIN_COMMENT_SCORE", "-2"))
-    verbose = os.environ.get("VERBOSE", "0") in ("1", "true", "True", "yes", "YES")
-
-    return Config(
-        base_dir=base_dir,
-        db_path=db_path,
-        lookback_hours=lookback_hours,
-        min_comment_len=min_comment_len,
-        min_comment_score=min_comment_score,
-        verbose=verbose,
-    )
 
 
 # -------------------------
@@ -306,14 +262,14 @@ def detect_direction(text: str) -> tuple[str, float]:
     return "neutral", 0.5
 
 
-def comment_is_useful(body: str, score: int | None, cfg: Config) -> bool:
+def comment_is_useful(body: str, score: int | None, min_len: int, min_score: int) -> bool:
     if not body:
         return False
     if body in ("[deleted]", "[removed]"):
         return False
-    if len(body.strip()) < cfg.min_comment_len:
+    if len(body.strip()) < min_len:
         return False
-    if score is not None and score < cfg.min_comment_score:
+    if score is not None and score < min_score:
         return False
     return True
 
@@ -335,10 +291,9 @@ def filter_real_tickers(con: duckdb.DuckDBPyConnection, symbols: list[str]) -> s
 # Main processing
 # -------------------------
 
-def process_new_comments(con: duckdb.DuckDBPyConnection, cfg: Config) -> None:
-    since = datetime.now(timezone.utc) - timedelta(hours=cfg.lookback_hours)
+def process_new_comments(con: duckdb.DuckDBPyConnection, lookback_hours: int, min_len: int, min_score: int, verbose: bool = False) -> None:
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
-    # Only process comments that are not yet in comment_tickers
     rows = con.execute("""
         SELECT c.comment_id, c.body, c.score
         FROM comments c
@@ -348,7 +303,7 @@ def process_new_comments(con: duckdb.DuckDBPyConnection, cfg: Config) -> None:
           AND c.created_utc >= ?
     """, [since.replace(tzinfo=None)]).fetchall()
 
-    if cfg.verbose:
+    if verbose:
         print(f"[info] candidate new comments since {since.isoformat()}: {len(rows)}")
 
     inserted = 0
@@ -357,11 +312,11 @@ def process_new_comments(con: duckdb.DuckDBPyConnection, cfg: Config) -> None:
     skipped_not_real = 0
 
     for comment_id, body, score in rows:
-        if not comment_is_useful(body, score, cfg):
+        if not comment_is_useful(body, score, min_len, min_score):
             skipped_not_useful += 1
             continue
 
-        extracted = extract_tickers_wsb(body)  # dict[ticker]=method
+        extracted = extract_tickers_wsb(body)
         if not extracted:
             skipped_no_ticker += 1
             continue
@@ -381,18 +336,13 @@ def process_new_comments(con: duckdb.DuckDBPyConnection, cfg: Config) -> None:
             inserted += 1
 
     print(f"[ok] inserted rows into comment_tickers: {inserted}")
-    if cfg.verbose:
+    if verbose:
         print(f"[info] skipped_not_useful={skipped_not_useful} skipped_no_ticker={skipped_no_ticker} skipped_not_real={skipped_not_real}")
 
 
-def rebuild_comment_tickers(con: duckdb.DuckDBPyConnection, cfg: Config) -> None:
-    """
-    Recompute comment_tickers for the lookback window.
-    Use when you change extraction rules and want a clean recompute.
-    """
-    since = datetime.now(timezone.utc) - timedelta(hours=cfg.lookback_hours)
+def rebuild_comment_tickers(con: duckdb.DuckDBPyConnection, lookback_hours: int, min_len: int, min_score: int) -> None:
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
-    # Wipe recent entries (or wipe all if you prefer)
     con.execute("DELETE FROM comment_tickers")
 
     rows = con.execute("""
@@ -405,7 +355,7 @@ def rebuild_comment_tickers(con: duckdb.DuckDBPyConnection, cfg: Config) -> None
 
     inserted = 0
     for comment_id, body, score in rows:
-        if not comment_is_useful(body, score, cfg):
+        if not comment_is_useful(body, score, min_len, min_score):
             continue
 
         extracted = extract_tickers_wsb(body)
@@ -428,8 +378,8 @@ def rebuild_comment_tickers(con: duckdb.DuckDBPyConnection, cfg: Config) -> None
     print(f"[ok] rebuild inserted rows: {inserted}")
 
 
-def process_new_posts(con, cfg):
-    since = datetime.now(timezone.utc) - timedelta(hours=cfg.lookback_hours)
+def process_new_posts(con, lookback_hours: int):
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     rows = con.execute("""
         SELECT p.post_id, p.title, p.body
@@ -465,8 +415,8 @@ def process_new_posts(con, cfg):
     print(f"[ok] inserted rows into post_tickers: {inserted}")
 
 
-def rebuild_post_tickers(con, cfg):
-    since = datetime.now(timezone.utc) - timedelta(hours=cfg.lookback_hours)
+def rebuild_post_tickers(con, lookback_hours: int):
+    since = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
 
     # wipe extracted post tickers
     con.execute("DELETE FROM post_tickers")
@@ -507,33 +457,46 @@ def rebuild_post_tickers(con, cfg):
 # -------------------------
 
 def main() -> int:
-    cfg = load_config()
-    cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
+    dotenv_path = find_dotenv(usecwd=False)
+    if not dotenv_path:
+        raise RuntimeError("Could not find .env")
+    load_dotenv(dotenv_path)
+
+    base_dir_str = os.environ.get("BASE_DIR")
+    if not base_dir_str:
+        raise RuntimeError("Missing BASE_DIR in .env")
+    base_dir = Path(base_dir_str).expanduser().resolve()
+    db_path = Path(os.environ.get("DB_PATH", str(base_dir / "data" / "reddit.duckdb"))).expanduser().resolve()
+
+    lookback_hours = int(os.environ.get("LOOKBACK_HOURS", "36"))
+    min_len        = int(os.environ.get("MIN_COMMENT_LEN", "20"))
+    min_score      = int(os.environ.get("MIN_COMMENT_SCORE", "-2"))
+    verbose        = os.environ.get("VERBOSE", "0") in ("1", "true", "True", "yes", "YES")
 
     args = sys.argv[1:]
     do_rebuild = "--rebuild" in args
 
-    top_hours = 24
     for a in args:
         if a.startswith("--hours="):
-            top_hours = int(a.split("=", 1)[1])
+            lookback_hours = int(a.split("=", 1)[1])
 
-    if cfg.verbose:
-        print(f"[info] BASE_DIR={cfg.base_dir}")
-        print(f"[info] DB_PATH={cfg.db_path}")
+    if verbose:
+        print(f"[info] BASE_DIR={base_dir}")
+        print(f"[info] DB_PATH={db_path}")
 
-    con = duckdb.connect(str(cfg.db_path))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(db_path))
     try:
         ensure_comment_tickers_table(con)
         ensure_post_tickers_table(con)
         assert_tickers_table_exists(con)
 
         if do_rebuild:
-            rebuild_post_tickers(con, cfg)
-            rebuild_comment_tickers(con, cfg)
+            rebuild_post_tickers(con, lookback_hours)
+            rebuild_comment_tickers(con, lookback_hours, min_len, min_score)
         else:
-            process_new_posts(con, cfg)
-            process_new_comments(con, cfg)
+            process_new_posts(con, lookback_hours)
+            process_new_comments(con, lookback_hours, min_len, min_score, verbose)
 
     finally:
         con.close()

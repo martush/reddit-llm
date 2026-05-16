@@ -100,7 +100,7 @@ def get_top_posts(hours, limit):
 
 @st.cache_data(ttl=60)
 def get_ticker_sentiment(ticker, hours):
-    q = """
+    q = f"""
     SELECT
       SUM(ct.direction = 'bullish') AS bullish,
       SUM(ct.direction = 'bearish') AS bearish,
@@ -108,9 +108,9 @@ def get_ticker_sentiment(ticker, hours):
     FROM comment_tickers ct
     JOIN comments c ON c.comment_id = ct.comment_id
     WHERE ct.ticker = ?
-      AND c.created_utc >= NOW() - INTERVAL ? || ' hours'
+      AND c.created_utc >= NOW() - INTERVAL '{int(hours)} hours'
     """
-    return read_df(q, [ticker, str(int(hours))])
+    return read_df(q, [ticker])
 
 
 @st.cache_data(ttl=120)
