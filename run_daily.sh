@@ -26,7 +26,7 @@ LOG_FILE="${LOG_DIR}/daily_$(date -u +%Y-%m-%d).log"
   "${PYTHON}" "${SCRAPER}"
 
   echo "$(date -u)  [2/4] Postprocessing"
-  "${PYTHON}" "${POSTPROCESS}" --top
+  "${PYTHON}" "${POSTPROCESS}"
 
   echo "$(date -u)  [3/4] Build embedding queue"
   "${PYTHON}" "${EMBEDDING_QUEUE}"

@@ -1,4 +1,4 @@
-#!/home/martina/anaconda3/envs/reddit-llm/bin/python
+#!/usr/bin/env python3
 
 import os
 import duckdb
@@ -32,61 +32,58 @@ reddit = praw.Reddit(
 )
 print('Created reddit client')
 
-con = duckdb.connect(DB_PATH)
-print('Connected to db')
+with duckdb.connect(DB_PATH) as con:
+    print('Connected to db')
 
-for subreddit_name, cfg in SUBREDDITS.items():
-    subreddit = reddit.subreddit(subreddit_name)
+    for subreddit_name, cfg in SUBREDDITS.items():
+        subreddit = reddit.subreddit(subreddit_name)
 
-    if cfg["mode"] == "top_day":
-        posts = subreddit.top(time_filter="day", limit=cfg["limit"])
-    elif cfg["mode"] == "new":
-        posts = subreddit.new(limit=cfg["limit"])
-    else:
-        posts = subreddit.hot(limit=cfg["limit"])
+        if cfg["mode"] == "top_day":
+            posts = subreddit.top(time_filter="day", limit=cfg["limit"])
+        elif cfg["mode"] == "new":
+            posts = subreddit.new(limit=cfg["limit"])
+        else:
+            posts = subreddit.hot(limit=cfg["limit"])
 
-    for post in posts:
-        full_url = f"https://www.reddit.com{post.permalink}"
-
-        con.execute("""
-            INSERT OR IGNORE INTO posts
-            (post_id, subreddit, title, body, score, num_comments, created_utc, permalink, url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            post.id,
-            subreddit_name,
-            post.title,
-            post.selftext,
-            post.score,
-            post.num_comments,
-            datetime.fromtimestamp(post.created_utc),
-            post.permalink,
-            full_url
-        ))
-
-
-        # Skip low-engagement posts to reduce noise
-        if post.num_comments < 50:
-            continue
-
-        post.comments.replace_more(limit=0)
-
-        for c in post.comments.list():
-            if not c.body or c.body in ("[deleted]", "[removed]"):
-                continue
+        for post in posts:
+            full_url = f"https://www.reddit.com{post.permalink}"
 
             con.execute("""
-                INSERT OR IGNORE INTO comments
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO posts
+                (post_id, subreddit, title, body, score, num_comments, created_utc, permalink, url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                c.id,
                 post.id,
-                c.parent_id,
-                c.body,
-                c.score,
-                datetime.fromtimestamp(c.created_utc),
-                subreddit_name
+                subreddit_name,
+                post.title,
+                post.selftext,
+                post.score,
+                post.num_comments,
+                datetime.fromtimestamp(post.created_utc),
+                post.permalink,
+                full_url
             ))
 
-con.close()
+            if post.num_comments < cfg["min_comments"]:
+                continue
+
+            post.comments.replace_more(limit=0)
+
+            for c in post.comments.list():
+                if not c.body or c.body in ("[deleted]", "[removed]"):
+                    continue
+
+                con.execute("""
+                    INSERT OR IGNORE INTO comments
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    c.id,
+                    post.id,
+                    c.parent_id,
+                    c.body,
+                    c.score,
+                    datetime.fromtimestamp(c.created_utc),
+                    subreddit_name
+                ))
+
 print("Reddit scrape completed.")
