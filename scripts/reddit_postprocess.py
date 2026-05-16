@@ -512,7 +512,6 @@ def main() -> int:
 
     args = sys.argv[1:]
     do_rebuild = "--rebuild" in args
-    do_top = "--top" in args
 
     top_hours = 24
     for a in args:

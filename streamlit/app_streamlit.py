@@ -1,5 +1,5 @@
+import json
 import os
-import time
 from pathlib import Path
 
 import duckdb
@@ -98,6 +98,21 @@ def get_top_posts(hours, limit):
     return df
 
 
+@st.cache_data(ttl=60)
+def get_ticker_sentiment(ticker, hours):
+    q = """
+    SELECT
+      SUM(ct.direction = 'bullish') AS bullish,
+      SUM(ct.direction = 'bearish') AS bearish,
+      COUNT(*)                      AS total
+    FROM comment_tickers ct
+    JOIN comments c ON c.comment_id = ct.comment_id
+    WHERE ct.ticker = ?
+      AND c.created_utc >= NOW() - INTERVAL ? || ' hours'
+    """
+    return read_df(q, [ticker, str(int(hours))])
+
+
 @st.cache_data(ttl=120)
 def get_recent_tickers(hours):
     q = f"""
@@ -150,7 +165,6 @@ def stream_ollama_response(ollama_host, llm_model, prompt):
     logger.debug('Iterating over Ollama response')
     for line in r.iter_lines():
         if line:
-            import json
             chunk = json.loads(line)
             if "response" in chunk:
                 yield chunk["response"]
@@ -164,8 +178,7 @@ def main():
     with st.sidebar:
         hours = st.slider("Lookback (hours)", min_value=6, max_value=168, step=6, value=24)
         limit = st.number_input("Limit", min_value=5, max_value=100, step=5, value=20)
-        #st.caption(f"DB: {DB_PATH}")
-        fin_data_period = st.selectbox(label="Price change period", 
+        fin_data_period = st.selectbox(label="Price change period",
                                        options=('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'),
                                        index=2)
         logger.debug(f'Fin data selection {fin_data_period}')
@@ -196,7 +209,7 @@ def main():
                 axis=1
             )
             fig = px.bar(df_t_graph, x="label", y="score_weighted")
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_t)
 
         st.subheader("Top posts (by comment count)")
@@ -212,7 +225,7 @@ def main():
                     "link": st.column_config.LinkColumn("reddit link"),
                 },
                 disabled=True,
-                width="stretch",
+                use_container_width=True,
             )
 
 
@@ -228,10 +241,9 @@ def main():
                     'Price'             : '${:.2f}',
                     'Change'            : '${:.2f}',
                     'Change %'          : '{:.2f}%',
-                    'Volume'            : lambda x: format_volume(x),
-                    'Volume for period' : lambda x: format_volume(x),
-                    #'Avg Volume'        : lambda x: format_volume(x),
-                    'Market Cap'        : lambda x: format_market_cap(x),
+                    'Volume'     : lambda x: format_volume(x),
+                    'Avg Volume' : lambda x: format_volume(x),
+                    'Market Cap' : lambda x: format_market_cap(x),
                 }).background_gradient(subset=['Change %'], cmap='RdYlGn', vmin=-5, vmax=5),
                 use_container_width=True,
                 hide_index=True
@@ -240,8 +252,6 @@ def main():
     ################# Tab 2 ##########################
     with tab2:
         st.subheader("Drill-down")
-        # Hardcode to 1 week
-        #recent = get_recent_tickers(hours)
         recent = get_recent_tickers(168)
         if recent.empty:
             st.info("No tickers found in the selected window.")
@@ -287,11 +297,6 @@ def main():
             st.write("No posts.")
         else:
             df_tp["reddit_url"] = df_tp["reddit_url"].astype(str)
-
-            # st.dataframe(df_tp)
-            # for _, r in df_tp.head(10).iterrows():
-            #     st.markdown(f"- [{r['title']}]({r['reddit_url']})")
-
             df_tp = df_tp.rename(columns={"reddit_url": "link"})
             st.data_editor(
                 df_tp,
@@ -299,8 +304,8 @@ def main():
                     "link": st.column_config.LinkColumn("reddit link"),
                 },
                 disabled=True,
-                width="stretch",
-            )    
+                use_container_width=True,
+            )
 
         # Comments mentioning ticker
         q_com = f"""
@@ -384,48 +389,46 @@ def main():
                 st.subheader("Key Metrics")
                 
                 info = get_ticker_info(ticker)
-                
-                # Display metrics
-                st.metric(
-                    label="Current Price",
-                    value=f"${info['current_price']:.2f}",
-                    delta=f"{(info['current_price'] - info['previous_close']):.2f} ({((info['current_price'] - info['previous_close']) / info['previous_close'] * 100):.2f}%) vs previous close"
-                )
-                
+                curr = info['current_price']
+                prev = info['previous_close']
+
+                if prev > 0:
+                    price_delta = f"{curr - prev:.2f} ({(curr - prev) / prev * 100:.2f}%) vs previous close"
+                else:
+                    price_delta = None
+
+                st.metric(label="Current Price", value=f"${curr:.2f}", delta=price_delta)
+
                 st.metric(
                     label="Volume",
                     value=format_volume(info['volume']),
                     delta=f"{((info['volume'] - info['avg_volume']) / info['avg_volume'] * 100):.1f}% vs avg" if info['avg_volume'] > 0 else None
                 )
-                
-                st.metric(
-                    label="Market Cap",
-                    value=format_market_cap(info['market_cap'])
-                )
-                
-                st.metric(
-                    label="Avg Volume (3mo)",
-                    value=format_volume(info['avg_volume'])
-                )
-                
-                # Show Reddit sentiment alongside
-                #st.subheader("Reddit Sentiment")
-                # Add your sentiment data here from DuckDB
-                # sentiment = get_sentiment_for_ticker(selected_ticker)
-                #st.write("Bullish mentions: X")
-                #st.write("Bearish mentions: Y")
+
+                st.metric(label="Market Cap", value=format_market_cap(info['market_cap']))
+
+                st.metric(label="Avg Volume (3mo)", value=format_volume(info['avg_volume']))
+
+                st.divider()
+                st.subheader("Reddit Sentiment")
+                sent = get_ticker_sentiment(ticker, drill_hours)
+                if not sent.empty:
+                    bullish = int(sent["bullish"].iloc[0] or 0)
+                    bearish = int(sent["bearish"].iloc[0] or 0)
+                    total   = int(sent["total"].iloc[0] or 0)
+                    neutral = total - bullish - bearish
+                    st.metric(label="Bullish mentions", value=bullish)
+                    st.metric(label="Bearish mentions", value=bearish)
+                    st.metric(label="Neutral mentions", value=neutral)
 
     ################# Tab 3 ##########################
     with tab3:
         st.header("Ask AI about Reddit Sentiment")
         
-        # Load environment variables
-        base_dir = Path(os.environ["BASE_DIR"]).expanduser().resolve()
-        chroma_dir = Path(os.environ.get("CHROMA_DIR", base_dir / "data" / "chroma")).expanduser().resolve()
+        chroma_dir = Path(os.environ.get("CHROMA_DIR", BASE_DIR / "data" / "chroma")).expanduser().resolve()
         collection_name = os.environ.get("CHROMA_COLLECTION", "reddit_high_engagement")
         embed_model_name = os.environ.get("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
         ollama_host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-        #llm_model = os.environ.get("LLM_MODEL", "llama3.1:8b")
         llm_model = os.environ.get("LLM_MODEL", "llama3.2:3b")
     
         # Input
