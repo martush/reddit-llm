@@ -55,7 +55,7 @@ def get_top_tickers(hours, limit):
     SELECT
       ct.ticker,
       t.name AS company_name,
-      SUM(c.score) AS score_weighted,
+      SUM(c.score) AS score,
       COUNT(DISTINCT ct.comment_id) AS unique_comments,
       COUNT(DISTINCT c.post_id) AS threads,
       SUM(ct.direction='bullish') AS bullish,
@@ -67,7 +67,7 @@ def get_top_tickers(hours, limit):
       AND (LENGTH(ct.ticker) >= 2 OR ct.method='dollar')
     GROUP BY ct.ticker, t.name
     HAVING threads >= 2 AND unique_comments >= 5
-    ORDER BY score_weighted DESC
+    ORDER BY score DESC
     LIMIT {limit};
     """
     logger.debug('Query get_top_tickers')
@@ -198,7 +198,7 @@ def main():
 
     ################# Tab 1 ##########################
     with tab1:
-        st.subheader("Top tickers (comments, score-weighted)")
+        st.subheader("Top tickers (comments, score)")
         df_t = get_top_tickers(hours, limit)
         if df_t.empty:
             st.info("No ticker data yet. Run scraper + postprocess.")
@@ -208,7 +208,7 @@ def main():
                 lambda r: f'{r["ticker"]} — {r["company_name"]}' if pd.notna(r["company_name"]) else r["ticker"],
                 axis=1
             )
-            fig = px.bar(df_t_graph, x="label", y="score_weighted")
+            fig = px.bar(df_t_graph, x="label", y="score")
             st.plotly_chart(fig, use_container_width=True)
             st.dataframe(df_t)
 
