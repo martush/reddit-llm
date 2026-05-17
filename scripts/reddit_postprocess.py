@@ -101,6 +101,7 @@ BLACKLIST = {
 }
 
 HIGH_FALSE_POSITIVE = {
+    "IPO",
     "ICE",
     "NATO",
     "UAE",
