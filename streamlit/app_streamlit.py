@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 
+def _safe_int(v):
+    return 0 if pd.isna(v) else int(v)
+
+
 def read_df(sql, params=None):
     '''
     Function which reads an SQL statement and returns a df
@@ -413,9 +417,9 @@ def main():
                 st.subheader("Reddit Sentiment")
                 sent = get_ticker_sentiment(ticker, drill_hours)
                 if not sent.empty:
-                    bullish = int(sent["bullish"].iloc[0] or 0)
-                    bearish = int(sent["bearish"].iloc[0] or 0)
-                    total   = int(sent["total"].iloc[0] or 0)
+                    bullish = _safe_int(sent["bullish"].iloc[0])
+                    bearish = _safe_int(sent["bearish"].iloc[0])
+                    total   = _safe_int(sent["total"].iloc[0])
                     neutral = total - bullish - bearish
                     st.metric(label="Bullish mentions", value=bullish)
                     st.metric(label="Bearish mentions", value=bearish)
